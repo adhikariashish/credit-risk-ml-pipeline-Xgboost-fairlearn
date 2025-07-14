@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: credit_risk_ml_pipeline_Xgboost-fairlearn
+Version: 0.1.0
+Requires-Dist: pyyaml
+Requires-Dist: xgboost
+Requires-Dist: fairlearn
+Dynamic: requires-dist
