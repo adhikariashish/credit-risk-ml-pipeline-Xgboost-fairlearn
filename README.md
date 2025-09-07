@@ -194,7 +194,7 @@ model:
   resample: smote                             # or: none
   fairlearn:
     sensitive_feature: property_state         # name present in processed CSV
-
+```
 
 **Naming conventions**
 
