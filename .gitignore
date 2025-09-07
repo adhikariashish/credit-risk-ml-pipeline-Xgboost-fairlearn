@@ -1,4 +1,7 @@
 # Ignore large data files
 data/raw/*.csv
+data/raw/*.xlsx
 data/interim/*.csv
 data/processed/*.csv
+predictions/*.csv
+models/*.joblib

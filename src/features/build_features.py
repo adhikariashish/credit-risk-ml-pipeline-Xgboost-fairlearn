@@ -4,11 +4,31 @@ import pandas as pd
 import numpy as np
  
 # importing the dataset
-from pipeline_config import cfg
 from pathlib import Path
+import re
+import argparse
+import os
+import sys
 
 def load_data(interim_data_path : Path):
-    df = pd.read_csv(interim_data_path, low_memory = False)
+    path = interim_data_path  # csv file Path
+
+    if not path.is_file():
+        print(f"❌ File not found: {path}\n👉 Double-check the path and try again.")
+        sys.exit(1)
+
+    if path.suffix.lower() != ".csv":
+        print(f"⚠️ Expected a .csv file, got: {path.suffix}. Proceeding anyway…")
+
+    try:
+        df = pd.read_csv(path, low_memory=False, encoding="utf-8")
+    except Exception as e:
+        print(f"❌ Failed to read CSV at {path}\n   Reason: {e}")
+        sys.exit(1)
+
+    if df.empty:
+        print(f"❌ The CSV at {path} is empty. Please provide a non-empty file.")
+        sys.exit(1)
 
     df.columns = (df.columns
                 .str.strip()        # remove leading/trailing whitespace
@@ -220,13 +240,56 @@ def prune_col(df) -> pd.DataFrame:
 
     return df
 
+
+def topk_categorical_features(df: pd.DataFrame, cat_thresh: int = 10) -> pd.DataFrame:
+    """
+    - If a categorical column has <= cat_thresh unique values: leave it as-is.
+    - If > cat_thresh: replace values with Top-K categories; all others -> 'Other'.
+    - Also adds `property_state_target_enc` if both columns exist.
+    """
+    df = df.copy()
+
+    # Target encoding for property_state (note: fit on TRAIN only in practice)
+    if "property_state" in df.columns and "default_flag" in df.columns:
+        df["property_state_target_enc"] = (
+            df.groupby("property_state")["default_flag"].transform("mean")
+        )
+
+    # Identify categorical columns
+    cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+
+    for col in cat_cols:
+        # How many distinct values (including NaN)
+        n_unique = df[col].nunique(dropna=False)
+
+        if n_unique <= cat_thresh:
+            # inside threshold -> do nothing
+            continue
+
+        # Collapse to Top-K + 'Other' (treat NaN as its own value)
+        s = df[col].astype("string").fillna("Missing")
+        top_vals = s.value_counts(dropna=False).nlargest(cat_thresh).index
+
+        # Replace original column in-place
+        df[col] = s.where(s.isin(top_vals), "Other")
+
+    return df
+
+'''
 def encode_categorical_features(df, cat_thresh = 10) -> pd.DataFrame:
-    '''
-        -> for each categorical column check for categories 
-            - if unique < threshold categories, do one-hot encoding directly
-            - if unique > threshold categories, group to top N categories,and remaining to others and the one-hot encode. 
-        -> target encode for very high cardinality features.
-    '''
+'''
+        # -> for each categorical column check for categories 
+        #     - if unique < threshold categories, do one-hot encoding directly
+        #     - if unique > threshold categories, group to top N categories,and remaining to others and the one-hot encode. 
+        # -> target encode for very high cardinality features.
+'''
+    if 'property_state' in df.columns:
+        # For each row, look up the mean default rate of its state
+        df['property_state_target_enc'] = (
+            df.groupby('property_state')['default_flag']
+            .transform('mean')
+        )
+
     # identify categorical features
     cat_cols = df.select_dtypes(include = ['object', 'category']).columns.tolist()
 
@@ -251,19 +314,28 @@ def encode_categorical_features(df, cat_thresh = 10) -> pd.DataFrame:
             df = pd.concat([df, dummies], axis=1)
 
             df.drop(columns=[col, grp_col], inplace=True) 
+    #-----------------------------------------------------------------
+    # not dropping the column to implement fairlearn later in the trained model
+    #-----------------------------------------------------------------
+    state_cols = [
+        c for c in df.columns
+        if re.fullmatch(r"property_state_(?:[A-Z]{2}|Other)", c)
+    ]
 
-    if 'property_state' in df.columns:
-        # For each row, look up the mean default rate of its state
-        df['property_state_target_enc'] = (
-            df.groupby('property_state')['default_flag']
-            .transform('mean')
-        )
-        # Drop the original categorical column
-        df.drop(columns=['property_state'], inplace=True)
+    argmax_idx = df[state_cols].values.argmax(axis=1)
+
+    # Build an array of state codes (dropping the prefix)
+    state_names = np.array([c.replace("property_state_", "") for c in state_cols])
+
+    # Create a Series aligned to df.index and assign it back
+    df["property_state"] = pd.Series(
+        state_names[argmax_idx],
+        index=df.index
+    )
 
 
     return df
-
+'''
 def save_data(df: pd.DataFrame, processed_data_path: Path) -> None:
     """
     Save the cleaned data to the processed directory.
@@ -271,70 +343,115 @@ def save_data(df: pd.DataFrame, processed_data_path: Path) -> None:
     processed_data_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(processed_data_path, index=False)
 
+def parse_args():
+    p = argparse.ArgumentParser(description="Clean interim data by quarter")
+    p.add_argument(
+        "--quarters", "--quarter", "-q",
+        required=True,
+        help="Quarter tag to process, e.g. '2024Q4' or '2024Q1,2024Q2'"
+    )
+    p.add_argument("--config", "-c", default=None, help="Path to config.yaml (optional)")
+    return p.parse_args()
+
 def main():
-    # function 
+    # arg parser
+    args = parse_args()
 
-    interim_dir = cfg["data"]["interim_dir"]
-    interim_data_path = interim_dir / "credit_risk_data.csv"
+    # If provided, point pipeline_config at a custom YAML BEFORE importing cfg
+    if args.config:
+        os.environ["CR_CONFIG_PATH"] = args.config
 
-    processed_dir = cfg["data"]["processed_dir"]
-    processed_data_path = processed_dir / "credit_risk_features.csv"
+    from pipeline_config import cfg
 
-    print("▶️  Loading the interim data...")
-    df = load_data(interim_data_path)    
+    # Normalize quarters into a list
+    quarters = [q.strip() for q in args.quarters.split(",") if q.strip()]
 
-    print("▶️  Performing clean and drop...")
-    # dropping the useless features selected from EDA 
-    df = drop_features(df)
+    for quarter in quarters:
+        if not re.fullmatch(r"\d{4}Q[1-4]", quarter):
+            raise ValueError(f"Invalid quarter: {quarter} (expected YYYYQn, e.g. 2024Q4)")
 
-    print("▶️  Performing basic transformation...")
-    # converting the data columns to DATEFORMAT
-    df = convert_to_date_cols(df)
+        # Validate the quarter format: four digits + ‘Q’ + 1–4
+        if not re.fullmatch(r"\d{4}Q[1-4]", quarter):
+            raise ValueError(
+                f"\n\n❌ Invalid quarter format: '{quarter}'.\n"
+                "✅ Expected format is YYYYQn, where n is 1, 2, 3, or 4, e.g. 2024Q4.\n"
+            )
 
-    # lists of columns that are skewed
-    skew_cols = [
-        'original_upb', 
-        'current_actual_upb',
-        'debt_to_income_dti', 
-        'borrower_credit_score_at_origination',
-        'original_interest_rate',
-        'current_interest_rate',
-        'loan_age'
-    ]
-    transf_cols = ['original_upb', 'current_actual_upb']
+        interim_dir = cfg["data"]["interim_dir"]
+        interim_data_path = interim_dir / cfg["templates"]['interim'].format(quarter=quarter)
 
-    # Cap outliers at 1st/99th percentile
-    df = cap_outliers(df, skew_cols, lower_pct=0.01, upper_pct=0.99)
+        processed_dir = cfg["data"]["processed_dir"]
+        processed_dir.mkdir(parents=True, exist_ok=True)
+        processed_data_path = processed_dir / cfg["templates"]["processed"].format(quarter=quarter)
 
-    # Log-transform heavy skew
-    df = log_transform(df, transf_cols)
+        print("▶️  Loading the interim data...")
+        df = load_data(interim_data_path)    
 
-    print("▶️  Performing Feature construction...")
-    # create a composite features combinining features 
-    df = composite_features(df)
+        print("▶️  Performing clean and drop...")
+        # dropping the useless features selected from EDA 
+        df = drop_features(df)
 
-    print("▶️  Performing imputation for missing values...")
-    #imputing the missing columns values 
-    df = impute_cols(df, drop_thresh=0.5, low_thresh=0.05, high_thresh=0.10)
+        print("▶️  Performing basic transformation...")
+        # converting the data columns to DATEFORMAT
+        df = convert_to_date_cols(df)
 
-    print("▶️  Performing redundancy pruning...")
-    #remove one column from high collinear pairs
-    df = prune_col(df)
+        # lists of columns that are skewed
+        skew_cols = [
+            'original_upb', 
+            'current_actual_upb',
+            'debt_to_income_dti', 
+            'borrower_credit_score_at_origination',
+            'original_interest_rate',
+            'current_interest_rate',
+            'loan_age'
+        ]
+        transf_cols = ['original_upb', 'current_actual_upb']
 
-    print("▶️  Performing standarization...")
-    #standarize the numerical features 
-    df = standardize(df)
+        # Cap outliers at 1st/99th percentile
+        df = cap_outliers(df, skew_cols, lower_pct=0.01, upper_pct=0.99)
 
-    print("▶️  Performing one-hot encoding...")
-    # one-hot encode categorical features 
-    df = encode_categorical_features(df, 10)
+        # Log-transform heavy skew
+        df = log_transform(df, transf_cols)
 
-    # saving the processed data
-    print("▶️  Saving the processed data...")
-    save_data(df, processed_data_path)
+        print("▶️  Performing Feature construction...")
+        # create a composite features combinining features 
+        df = composite_features(df)
 
-    print("✅ Data feature engineering is complete. The processed data is saved to:", processed_data_path)
+        print("▶️  Performing imputation for missing values...")
+        #imputing the missing columns values 
+        df = impute_cols(df, drop_thresh=0.5, low_thresh=0.05, high_thresh=0.10)
+
+        print("▶️  Performing redundancy pruning...")
+        #remove one column from high collinear pairs
+        df = prune_col(df)
+
+        print("▶️  Performing standarization...")
+        #standarize the numerical features 
+        df = standardize(df)
+
+        print("▶️  Grouping TopK categorical features...")
+        # one-hot encode categorical features 
+        df = topk_categorical_features(df, 10)
+
+        # Drop any leftover datetime columns now that we've derived all deltas
+        dt_cols = [
+            'report_period_dt',
+            'origination_dt',
+            'first_payment_dt',
+            'maturity_dt',
+            'zero_balance_dt'
+        ]
+        
+        print("▶️  dropping leftover datetime columns to make data model ready...")
+        df = df.drop(columns=[c for c in dt_cols if c in df.columns], errors='ignore')
+
+        # saving the processed data
+        print("▶️  Saving the processed data...")
+        save_data(df, processed_data_path)
+
+        print(f"✅ Data feature engineering is complete. The processed data is saved to: data/processed/credit_risk_features_{quarter}.csv")
 
 if __name__ == "__main__":
+
     main()
-    print("Build Features script executed successfully.")     
+    print("🍾 Build Features script executed successfully.")     
