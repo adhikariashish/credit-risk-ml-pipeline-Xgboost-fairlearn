@@ -1,7 +1,31 @@
-# Ignore large data files
+# --- Python / env / OS ---
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.ipynb_checkpoints/
+.DS_Store
+Thumbs.db
+
+# --- Project artifacts ---
+# keep empty directories
 data/raw/*.csv
 data/raw/*.xlsx
+!data/raw/.gitkeep
+
 data/interim/*.csv
+!data/interim/.gitkeep
+
 data/processed/*.csv
+!data/processed/.gitkeep
+
 predictions/*.csv
+!predictions/.gitkeep
+
 models/*.joblib
+!models/.gitkeep
+
+reports/**
+!reports/.gitkeep
