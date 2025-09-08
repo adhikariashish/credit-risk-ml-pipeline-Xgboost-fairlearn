@@ -129,7 +129,7 @@ project_root/
 │  └─ 02_model_experiments.ipynb
 ├─ requirements.txt
 └─ README.md
-
+```
 
 ## 🛠️  Setup & Installation 
 
