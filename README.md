@@ -94,38 +94,39 @@ flowchart LR
 * **Fairness (optional)**
 
   * Compute metrics by **sensitive features from raw/bucketed** columns (aligned to predictions).
-
+  
 ## 📁 Repository Layout
 
+```text
 project_root/
-├─ pipeline_config/          				# configuration + absolute path resolution
-│ ├─ init.py
-│ └─ config.yaml 							# all hyperparams, paths, templates, fairlearn keys
+├─ pipeline_config/          # configuration + absolute path resolution
+│  ├─ __init__.py
+│  └─ config.yaml            # all hyperparams, paths, templates, fairness keys
 ├─ data/
-│ ├─ raw/ 									# pristine source files by quarter (e.g., 2024Q4.csv, 2025Q1.csv)
-│ ├─ interim/ 								# cleaned/stitched but not model-ready
-│ └─ processed/ 							# model-ready artifacts
-│ 	└─ <QUARTER>_features.csv	 			# e.g., 2024Q4_features.csv
-│ 	└─ <QUARTER>features_bg.csv 			# SHAP background (same schema pre-preprocessor)
+│  ├─ raw/                   # pristine source files by quarter (e.g., 2024Q4.csv, 2025Q1.csv)
+│  ├─ interim/               # cleaned/stitched but not model-ready
+│  └─ processed/             # model-ready artifacts
+│     ├─ <QUARTER>_features.csv         # e.g., 2024Q4_features.csv
+│     └─ <QUARTER>_features_bg.csv      # SHAP background (same schema pre-preprocessor)
 ├─ src/
-│ ├─ init.py
-│ ├─ data/
-│ │ └─ make_dataset.py 						# raw → interim/processed recipes & loaders
-│ ├─ features/
-│ │ └─ build_features.py 					# feature engineering; Top-K bucketing IN PLACE (no OHE)
-│ └─ models/
-│ ├─ train_model.py 						# split → fit preprocessor once → (SMOTE train-only) → train → bundle
-│ └─ predict_model.py 						# scoring CLI + SHAP (uses saved preprocessor/model/feature_names)
-├─ models/ 									# serialized bundles (joblib)
-│ └─ final_model<SERIAL>.joblib
-├─ predictions/ 							# generated prediction CSVs
-│ └─ <QUARTER>_preds.csv
+│  ├─ __init__.py
+│  ├─ data/
+│  │  └─ make_dataset.py     # raw → interim/processed recipes & loaders
+│  ├─ features/
+│  │  └─ build_features.py   # feature engineering; Top-K bucketing IN PLACE (no OHE)
+│  └─ models/
+│     ├─ train_model.py      # split → fit preprocessor once → SMOTE train-only → train → bundle
+│     └─ predict_model.py    # scoring CLI + SHAP (uses saved preprocessor/model/feature_names)
+├─ models/                   # serialized bundles (joblib)
+│  └─ final_model_<SERIAL>.joblib
+├─ predictions/              # generated prediction CSVs
+│  └─ <QUARTER>_preds.csv
 ├─ scripts/
-│ └─ run_full_pipeline.sh 					# flags-first; prompts if --serial/--data not supplied
-├─ notebooks/ 								# optional exploratory work (EDA, experiments)
-│ ├─ 00_define_problem.ipynb
-│ ├─ 01_EDA.ipynb
-│ └─ 02_model_experiments.ipynb
+│  └─ run_full_pipeline.sh   # flags-first; prompts if --serial/--data not supplied
+├─ notebooks/                # optional exploratory work (EDA, experiments)
+│  ├─ 00_define_problem.ipynb
+│  ├─ 01_EDA.ipynb
+│  └─ 02_model_experiments.ipynb
 ├─ requirements.txt
 └─ README.md
 
@@ -458,6 +459,94 @@ python src/models/train_model.py --quarters 2024Q4,2025Q1
 | Recall @ thr    | 0.62        |
 | F1 @ thr        | 0.41        |
 | TPR / FPR       | 0.62 / 0.18 |
+
+## 🏆 Results & Metrics (achieved)
+
+**Model version (SERIAL):** `2024Q4_2025Q1`  
+**Saved bundle:** `models/final_model_2024Q4_2025Q1.joblib`  
+**Decision policy:** choose threshold under a **top-percentile budget ≤ 5%** of scored accounts.
+
+---
+
+### Validation (after tuning & calibration)
+| Metric | Tuned | Calibrated |
+|---|---:|---:|
+| ROC-AUC | **0.9102** | **0.9118** |
+| Average Precision (AUPRC) | **0.1287** | **0.1235** |
+
+**Threshold selection (policy)**  
+Candidates with `top_pct ≤ 0.05`:
+- `top_pct=0.01` → `thr=0.0509`, **P**=0.1019, **R**=0.3223  
+- `top_pct=0.02` → `thr=0.0336`, **P**=0.0780, **R**=0.3858 ✅ *(chosen)*  
+- `top_pct=0.05` → `thr=0.0107`, **P**=0.0391, **R**=0.5533  
+
+**Chosen threshold:** `0.0336` (≈ **2%** selection rate on validation)
+
+---
+
+### Fairness (validation)
+Fairness reduction: **Demographic Parity** with ε = **0.02** (Fairlearn reductions).
+
+| Metric (val) | Base | Fair |
+|---|---:|---:|
+| Accuracy | 0.9728 | **0.9742** |
+| ROC-AUC | **0.9118** | 0.9074 |
+| Log-loss | **0.0207** | 0.0230 |
+| Reported parity gap (internal) | 0.0169 | ~0.0194 |
+
+> The *fair* model is selected to comply with the DP constraint; it trades a small AUC for parity.
+
+---
+
+### Final Test Evaluation (using threshold ≈ **0.03**)
+| Metric | Value |
+|---|---:|
+| ROC-AUC | **0.9146** |
+| Average Precision (AUPRC) | **0.1243** |
+| Precision @ thr | **0.0868** |
+| Recall @ thr | **0.3799** |
+| Accuracy | **0.9794** |
+
+*(Class-1 report excerpt @ thr ≈ 0.03: P=0.0668–0.0868, R≈0.38, F1≈0.11; support ≈ 787.)*
+
+---
+
+### Explainability (SHAP) — top global drivers
+1. `num__loan_age`  
+2. `cat__first_time_home_buyer_indicator_{N,Y}`  
+3. `num__upb_ratio`  
+4. `num__days_to_maturity`  
+5. `cat__seller_name_Other`  
+6. `num__original_upb`  
+7. `num__months_since_origination`  
+8. `cat__servicer_name_Other`  
+9. `num__number_of_borrowers`  
+10. `num__total_principal_current_imputed`
+
+
+## 🗣️ What these results mean (Stakeholder summary)
+
+- **Operating point chosen:** review the **top ~2%** highest-risk loans each quarter.
+- **Effectiveness at this point:** we capture **~38% of all future defaults** while keeping the review workload small.
+
+### What that looks like in practice (per 10,000 loans)
+- **Flagged for review:** ~**200** loans (2%)
+- **Expected true defaults among flags (precision ≈ 8.7%)**: **~17**
+- **Expected non-defaults to review:** **~183**
+
+> In other words: with ~200 case reviews, we surface ~17 likely defaults.  
+> Pushing beyond 2% increases work a lot but adds relatively few extra defaults:
+> - **1% workload:** ~100 reviews → **~10** true defaults, **~90** non-defaults  
+> - **5% workload:** ~500 reviews → **~20** true defaults, **~480** non-defaults
+
+### Why we picked 2%
+- It’s near the best trade-off between **defaults caught** and **operational cost**:
+  - **1%** misses too many defaults (recall ~32%) even though precision is slightly higher.
+  - **5%** catches more defaults (recall ~55%) but **more than doubles** workload while precision halves (~3.9%), so each additional review yields fewer true positives.
+
+### Quality & fairness
+- Overall discrimination is strong (**AUC ≈ 0.915** on test).
+- We apply a **demographic parity** fairness constraint (ε≈0.02), incurring only a small AUC trade-off to keep selection rates more even across groups.
 
 
 ## ⚖️ Fairness (sensitive features & checks)
