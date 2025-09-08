@@ -739,7 +739,7 @@ python src/models/predict_model.py --serial 2024Q4_2025Q1 --data 2024Q4
 # Score with SHAP explanations
 python src/models/predict_model.py --serial 2024Q4_2025Q1 --data 2024Q4 \
   --explain --shap-bg 2024Q4 --shap-frac 0.10
-
+```
 ### Minimal checklist (per retrain)
 
 * [ ] Choose quarters → **SERIAL** (e.g., `2024Q4_2025Q1`)
@@ -774,7 +774,7 @@ python src/models/predict_model.py --serial 2024Q4_2025Q1 --data 2024Q4 \
 - **SHAP background (per quarter, optional)** → `data/processed/<QUARTER>_features_bg.csv`
 
 ### Example after a train + score run
-```
+
 
 models/
 └─ final_model_2024Q4_2025Q1.joblib
@@ -786,14 +786,13 @@ data/processed/
 ├─ 2024Q4_features.csv
 ├─ 2024Q4_features_bg.csv
 └─ 2025Q1_features.csv
-```
+
 
 ### Naming conventions
 - `<QUARTER>` = `YYYYQn` (e.g., `2024Q4`)  
 - `<SERIAL>` = one or more quarters joined by `_` (e.g., `2024Q4_2025Q1`)
 
 > Tip: Never overwrite bundles. Keep all versions to enable rollbacks and side-by-side comparisons.
-```
 
 ## 🗺️ Roadmap / Future Work
 - Add automated data/schema checks before train/score.
